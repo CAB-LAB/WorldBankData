@@ -210,6 +210,14 @@ function removeNonAscii!(s::AbstractString)
     nothing
 end
 
+function removeNonAscii!(s::AbstractArray)
+    for i in eachindex(s)
+        removeNonAscii!(s[i])
+    end
+end
+
+
+
 # "\n"   -> " "
 # "\r\n" -> "\n"
 function cleanLineBreaks!(s::AbstractString)
@@ -256,17 +264,18 @@ println("reading in data")
 dc,years,series,countries,countryInfo,variableInfo = WorldBankDataToCube()
 
 println("creating dimensions variables")
-ncdimTime   = NcDim( "time",    size(dc,1), atts = Dict{Any, Any}("units"=>"year"),         values = convert(Array{ASCIIString}, years)     )
-ncdimSpace  = NcDim( "country", size(dc,2), atts = Dict{Any, Any}("units"=>"country code"), values = convert(Array{ASCIIString}, countries) )
-ncdimSeries = NcDim( "series",  size(dc,4), atts = Dict{Any, Any}("units"=>"series code"),  values = convert(Array{ASCIIString}, series)    )
+ncdimTime   = NcDim( "time",    size(dc,1), atts = Dict{Any, Any}("units"=>"year"),         values = convert(Array{Float32}, collect(eachindex(years)))     )
+ncdimSpace  = NcDim( "country", size(dc,2), atts = Dict{Any, Any}("units"=>"country code"), values = convert(Array{Float32}, collect(eachindex(countries))) )
+ncdimSeries = NcDim( "series",  size(dc,4), atts = Dict{Any, Any}("units"=>"series code"),  values = convert(Array{Float32}, collect(eachindex(series)))    )
 
 println("creating variables")
 vars = NetCDF.NcVar[ NcVar("global", [ncdimTime,ncdimSpace,ncdimSeries], t = Float32) ]
-for i in names(countryInfo)[2:end]
-    push!( vars, NcVar(string(i), ncdimSpace, t = ASCIIString) )
+push!( vars,  NetCDF.NcVar("time_year", ncdimTime, t = ASCIIString) )
+for i in names(countryInfo)
+    push!( vars, NcVar(string("country_",i), ncdimSpace,  t = ASCIIString ) )
 end
-for i in names(variableInfo)[2:end]
-    push!( vars, NcVar(string(i), ncdimSeries, t = ASCIIString) )
+for i in names(variableInfo)
+    push!( vars, NcVar(string("series_",i), ncdimSeries, t = ASCIIString ) )
 end
 
 println("creating file")
@@ -276,16 +285,21 @@ end
 nc = NetCDF.create( wbdatafilename, vars )
 
 println("adding global variables")
-NetCDF.putvar( nc, "global", size(squeeze(dc, 3)) )
-
+NetCDF.putvar( nc, "global", squeeze(dc, 3) )
+println("adding years variable")
+NetCDF.putvar( nc, "time_year", convert(Array{ASCIIString},years) )
 println("adding country info vars")
-for i in names(countryInfo)[2:end]
-    NetCDF.putvar( nc, string(i), convert(Array{ASCIIString}, countryInfo[i].data) )
+for i in names(countryInfo)
+    @show i
+    removeNonAscii!(countryInfo[i].data)
+    NetCDF.putvar( nc, string("country_", i), convert(Array{ASCIIString},  countryInfo[i].data) )
 end
 
 println("adding variable info vars")
-for i in names(variableInfo)[2:end]
-    NetCDF.putvar( nc, string(i), convert(Array{ASCIIString}, variableInfo[i].data) )
+for i in names(variableInfo)
+    @show i
+    removeNonAscii!(variableInfo[i].data)
+    NetCDF.putvar( nc, string("series_", i), convert(Array{ASCIIString}, variableInfo[i].data) )
 end
 
 println("closing file")
