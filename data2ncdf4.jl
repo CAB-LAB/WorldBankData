@@ -13,21 +13,24 @@ _Currently only tested for WDI_csv!!_ (2015 Version)
 function WorldBankDataToCube(folder::AbstractString = "WDI_csv")
 
     folder = joinpath(pwd(), folder)
-    
+
     # read in data and metadata
     data                   = WorldBankDataToDataFrame(folder)
     years,series,countries = getDims(data)
     countryInfo            = getCountryInfo(folder)
     variableInfo           = getVariableInfo(folder)
-    
-    nTime      = length(years)
-    nSeries    = length(series)
-    nCountries = length(countries)
+
+    @show nTime      = length(years)
+    @show nSeries    = length(series)
+    @show nCountries = length(countries)
+    #nCountries = nrow(countryInfo)
 
     # transform
     dc = fill(-9999.0f0,(nTime,nCountries,1,nSeries))
+    @show size(dc)
     fillDataCube!(dc, data, years, series, countries, nTime, nSeries, nCountries)
-
+    @show size(dc)
+    
     #return
     dc, years, series, countries, countryInfo, variableInfo
 end
@@ -57,7 +60,7 @@ function fillDataCube!(dc::AbstractArray,
                 for k in 1:nTime
                     print("\r$i/$nSeries, $j/$nCountries, $k/$nTime.")
                     tmp = data[symbol("x",years[k])][row][1]
-                    dc[k,j,1,i] = typeof(tmp) <: Number && tmp 
+                    dc[k,j,1,i] = typeof(tmp) <: Number && tmp
                 end
             elseif length(row) > 1
                 error("more than one fitting row: $(series[i]), $(countries[j])")
@@ -71,7 +74,7 @@ function fillDataCube!(dc::AbstractArray,
     for i in 1:nr
         if mod(i,10000) == 0
             print("\r", round(i/nr*100), "%")
-        end 
+        end
         cc = data[:Country_Code][i]::UTF8String
         ic = data[:Indicator_Code][i]::UTF8String
         while (ic != series[iic]) || (cc != countries[icc])
@@ -81,7 +84,7 @@ function fillDataCube!(dc::AbstractArray,
                 icc += 1
             end
             if icc > nCountries
-                stop("data should be ordered by [:Country_Code, :Series_Code]")
+                error("data should be ordered by [:Country_Code, :Series_Code]")
             end
         end
         if cc == countries[icc] && ic == series[iic]
@@ -97,27 +100,31 @@ function fillDataCube!(dc::AbstractArray,
     println("")
     nothing
 end
-    
-    
+
+
 function WorldBankDataToDataFrame(folder::AbstractString)
     files = readdir(folder)
     fileData = files[ [ ismatch(r"^[^.~].+_Data\.csv$",files[i])
                         for i in eachindex(files) ] ][1]
     df = DataFrames.readtable(joinpath(folder,fileData))
     DataFrames.sort!(df, cols = [:Country_Code,:Indicator_Code])
+    @show size(df)
+    df = df[df[:Country_Code] .!= "INX", :] # INX is no country and has no data
+    @show size(df)
+    df
 end
 
 function getDims(data::DataFrames.DataFrame)
 
     colnames = names(data)
     colnames = [ string(colnames[i])
-                 for i in eachindex(colnames) ] 
+                 for i in eachindex(colnames) ]
     indTime  = [ ismatch(r"x[0-9]{4}", colnames[i])
                  for i in eachindex(colnames) ]
-    
+
     vTime         = [ colnames[i][2:5]
                       for i in find(indTime) ]
-    
+
     vIndCodes     = Array(sort(unique(data[:Indicator_Code])))
     vCountryCodes = Array(sort(unique(data[:Country_Code])))
 
@@ -134,8 +141,13 @@ function getCountryInfo(folder::AbstractString)
 
     #remove regions
     countryIndex = bitunpack(~countries[:Region].na)
-    
-    countries[ countryIndex, [:Country_Code,:Short_Name,:Region,:Income_Group] ]
+    #countries[ countryIndex, [:Country_Code,:Short_Name,:Region,:Income_Group] ]
+
+    ## do not remove regions!! removing regions still causes inconsisten output
+    countries = countries[:, [:Country_Code, :Short_Name, :Region, :Income_Group]]
+    countries[:Is_Region] = string(countryIndex)
+    countries[:Region][countryIndex] = ""
+    countries
 end
 
 function getVariableInfo(folder::AbstractString)
@@ -152,10 +164,10 @@ function getVariableInfo(folder::AbstractString)
     cleanAccidentallyEscapedQuoteCharacters!(ss)
     series = DataFrames.readtable(IOBuffer(ss))
 
-    
+
     DataFrames.sort!(series, cols = [:Series_Code])
     nSeries = DataFrames.nrow(series)
-    
+
     ## separate topic column into hierarchies
     # the number of hierarchies
     maxwidth = 0
@@ -164,7 +176,7 @@ function getVariableInfo(folder::AbstractString)
                         length( find(i -> i == convert(UInt8, ':'),
                                      series[:Topic][i].data ) ) + 1 )
     end
- 
+
     # fille hierarchies with data
     topic = fill("",(nSeries,maxwidth))
     for i in 1:nSeries
@@ -184,7 +196,7 @@ function getVariableInfo(folder::AbstractString)
             seriesUnit[i] = "Number"
         end
     end
-    
+
     # Build the resulting dataframe
     res = series[:,[:Series_Code,:Indicator_Name]]
     res[:unit] = seriesUnit
@@ -203,7 +215,7 @@ end
 function removeNonAscii!(s::AbstractString)
     for i in eachindex(s.data)
         # remove all non ascii stuff
-        if s.data[i] >= 0x80 
+        if s.data[i] >= 0x80
             s.data[i] = b" "[1]
         end
     end
@@ -215,6 +227,18 @@ function removeNonAscii!(s::AbstractArray)
         removeNonAscii!(s[i])
     end
 end
+
+function naToEmptyString(x::DataArray)
+    if eltype(x) <: AbstractString
+        for i in eachindex(x)
+            if x.na[i]
+                x[i] = ""
+            end
+        end
+    end
+    nothing
+end
+
 
 
 
@@ -291,8 +315,13 @@ NetCDF.putvar( nc, "time_year", convert(Array{ASCIIString},years) )
 println("adding country info vars")
 for i in names(countryInfo)
     @show i
-    removeNonAscii!(countryInfo[i].data)
-    NetCDF.putvar( nc, string("country_", i), convert(Array{ASCIIString},  countryInfo[i].data) )
+    if eltype(countryInfo[i]) <: AbstractString
+        removeNonAscii!(countryInfo[i].data)
+        naToEmptyString(countryInfo[i])
+        NetCDF.putvar( nc, string("country_", i), convert(Array{ASCIIString},  countryInfo[i].data) )
+    else
+        warn("Warning: not a string")
+    end
 end
 
 println("adding variable info vars")
@@ -307,14 +336,19 @@ NetCDF.close(nc)
 println("DONE")
 
 
+#=
+some help to check data tests:
+
+glob = ncread("worldbank.nc", "global")
+cc = ncread("worldbank.nc", "country_Country_Code")
+tt = ncread("worldbank.nc", "time_year")
+ss = ncread("worldbank.nc", "series_Series_Code")
+
+size(glob)
 
 
-        
-
-    
-            
-
-    
-        
-                         
-    
+# should be true:
+glob[tt .== "1960", cc .== "ARB", ss .== "SP.ADO.TFRT"][1] == 133.5609074055f0
+# should be true:
+glob[tt .== "1960", cc .== "ZWE", ss .== "SP.URB.GROW"][1] == 4.8977456729f0
+=#
