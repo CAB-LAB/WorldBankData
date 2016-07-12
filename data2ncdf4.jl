@@ -140,13 +140,13 @@ function getCountryInfo(folder::AbstractString)
     sort!(countries, cols = [:Country_Code])
 
     #remove regions
-    countryIndex = bitunpack(~countries[:Region].na)
+    regionIndex = bitunpack(countries[:Region].na)
     #countries[ countryIndex, [:Country_Code,:Short_Name,:Region,:Income_Group] ]
 
     ## do not remove regions!! removing regions still causes inconsisten output
     countries = countries[:, [:Country_Code, :Short_Name, :Region, :Income_Group]]
-    countries[:Is_Region] = string(countryIndex)
-    countries[:Region][countryIndex] = ""
+    countries[:Is_Region] = UTF8String[string(i) for i in regionIndex]
+    countries[:Region][regionIndex] = ""
     countries
 end
 
@@ -339,13 +339,17 @@ println("DONE")
 #=
 some help to check data tests:
 
+ncinfo("worldbank.nc")
 glob = ncread("worldbank.nc", "global")
 cc = ncread("worldbank.nc", "country_Country_Code")
 tt = ncread("worldbank.nc", "time_year")
 ss = ncread("worldbank.nc", "series_Series_Code")
+ir = ncread("worldbank.nc", "country_Is_Region")
+rr = ncread("worldbank.nc","country_Region")
 
 size(glob)
 
+DataFrame(cc = cc, ir = ir, rr = rr)
 
 # should be true:
 glob[tt .== "1960", cc .== "ARB", ss .== "SP.ADO.TFRT"][1] == 133.5609074055f0
